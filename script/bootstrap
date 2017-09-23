@@ -1,0 +1,24 @@
+#!/bin/bash
+# script/bootstrap: Resolve all dependencies that the application requires to
+#                   run.
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+if [ ! -d venv ]; then
+  echo -e "\n==> Creating virtualenv [venv]"
+  python3 -m venv venv
+fi
+
+source venv/bin/activate
+
+if [ -f "requirements.txt" ]; then
+  echo -e "\n==> Installing pip dependencies...\n"
+  pip install -U -r requirements.txt
+fi
+
+if [ -f "dev_requirements.txt" ]; then
+  echo -e "\n==> Installing pip development dependencies...\n"
+  pip install -U -r dev_requirements.txt
+fi

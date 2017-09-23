@@ -1,0 +1,8 @@
+pytest
+autopep8
+isort
+flake8
+pytest-watch
+pytest-cov
+mypy
+wheel
