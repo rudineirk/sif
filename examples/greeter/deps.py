@@ -1,15 +1,15 @@
-from sif import Sif, client
+from sif import Sif, stub  # noqa
 
 SERVICE = 'greeter'
 
 
-class GreeterClient(client.Client):
+class GreeterStub(stub.Stub):
     service = SERVICE
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.greet = client.RpcMethod(self, 'Greet')
+        self.greet: stub.Rpc[str, str] = stub.Rpc(self, 'Greet', '')
 
 
 sif = Sif(SERVICE)
-greeter = GreeterClient(sif)
+greeter = GreeterStub(sif)

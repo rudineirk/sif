@@ -6,6 +6,14 @@ class MethodNotFound(SifException):
     pass
 
 
+class TopicNotFound(SifException):
+    pass
+
+
+class TransportNotFound(SifException):
+    pass
+
+
 class InvalidListener(SifException):
     pass
 

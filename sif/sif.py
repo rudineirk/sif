@@ -1,19 +1,37 @@
 import traceback
-from asyncio import Queue, ensure_future, get_event_loop
-from typing import List, Union  # noqa
+from asyncio import Future, Queue, ensure_future, get_event_loop  # noqa
+from typing import Any, Dict, List, Tuple, Union  # noqa
 
-from .data import (
+from .data import (  # noqa
     Context,
     Event,
+    PubSubMap,
     RpcCall,
+    RpcMap,
     RpcMethod,
     ServiceMethod,
     Subscription
 )
-from .exceptions import MethodNotFound
+from .exceptions import (
+    InvalidListener,
+    MethodNotFound,
+    TopicNotFound,
+    TransportNotFound
+)
+from .transports import (  # noqa
+    EventsQueue,
+    PubSubTransport,
+    RpcCallQueue,
+    RpcTransport
+)
+
+RpcFuncMap = Dict[Tuple[str, str], ServiceMethod[Any, Any]]
+SubFuncMap = Dict[Tuple[str, str], List[ServiceMethod[Any, Any]]]
+RcpTransportMap = Dict[str, RpcTransport]
+PubSubTransportMap = Dict[str, PubSubTransport]
 
 
-async def call_rpc(call: RpcCall, method: ServiceMethod):
+async def call_rpc(call: RpcCall, method: ServiceMethod[Any, Any]):
     ctx = Context()
     try:
         ret = await method(call.payload, ctx)
@@ -25,7 +43,7 @@ async def call_rpc(call: RpcCall, method: ServiceMethod):
     call.fut.set_result(ret)
 
 
-async def call_subscription(event: Event, sub: ServiceMethod):
+async def call_subscription(event: Event, sub: ServiceMethod[Any, Any]):
     ctx = Context()
     try:
         await sub(event.payload, ctx)
@@ -34,56 +52,102 @@ async def call_subscription(event: Event, sub: ServiceMethod):
 
 
 class Sif:
-    def __init__(self, service: str):
+    def __init__(self, service: str) -> None:
         self.loop = get_event_loop()
         self.service = service
-        self.rpcs = {}
-        self.subscriptions = {}
-        self.local_rpc_queue = Queue()
-        self.remote_rpc_queue = Queue()
-        self.pubsub_send_queue = Queue()
-        self.pubsub_receive_queue = Queue()
+        self.rpcs: RpcFuncMap = {}
+        self.subs: SubFuncMap = {}
+        self.rpcs_decl: RpcMap = {}
+        self.subs_decl: PubSubMap = {}
+        self.rpc_transports: RcpTransportMap = {}
+        self.pubsub_transports: PubSubTransportMap = {}
+
+        self.local_rpc_queue: RpcCallQueue = Queue()
         self.futures: List[Future] = []
         self.running = True
 
     def add_decl(self, decl: Union[RpcMethod, Subscription]) -> None:
         if isinstance(decl, RpcMethod):
-            self.rpcs[(decl.service, decl.method)] = decl
+            self.rpcs_decl[(decl.service, decl.method)] = decl
         else:
-            self.subs[(decl.service, decl.topic)] = decl
+            self.subs_decl[(decl.service, decl.topic)] = decl
+
+    def add_rpc_transport(self, name: str, transport: RpcTransport) -> None:
+        self.rpc_transports[name] = transport
+
+    def add_pubsub_transport(
+        self,
+        name: str,
+        transport: PubSubTransport,
+    ) -> None:
+        self.pubsub_transports[name] = transport
 
     def add_subscriber(
         self,
-        service: str,
-        topic: str,
-        func: ServiceMethod,
+        decl: Subscription,
+        func: ServiceMethod[Any, Any],
     ) -> None:
-        if topic not in self.subscriptions:
-            self.subscriptions[topic] = []
+        key = (decl.service, decl.topic)
+        if key not in self.subs:
+            self.subs[key] = []
 
-        self.subscriptions[topic].append(func)
+        self.subs[key].append(func)
 
-    def add_rpc_method(self, method: str, func: ServiceMethod) -> None:
-        self.rpcs[method] = func
+    def add_rpc_method(
+        self,
+        decl: RpcMethod,
+        func: ServiceMethod[Any, Any],
+    ) -> None:
+        if decl.service != self.service:
+            raise InvalidListener(
+                'You cannot listen to a rpc method of another service'
+            )
+        self.rpcs[(decl.service, decl.method)] = func
 
     def enqueue_rpc_call(self, call: RpcCall) -> None:
+        try:
+            decl = self.rpcs_decl[(call.service, call.method)]
+        except KeyError:
+            raise MethodNotFound(
+                f'service:{call.service} method:{call.method}'
+            )
         if call.service == self.service:
             self.local_rpc_queue.put_nowait(call)
             return
 
-        self.remote_rpc_queue.put_nowait(call)
+        transport = self.get_transport(decl)
+        transport.send_queue.put_nowait(call)
 
     async def push(self, event: Event) -> None:
-        await self.pubsub_send_queue.put(event)
+        try:
+            decl = self.subs_decl[(event.service, event.topic)]
+        except KeyError:
+            raise TopicNotFound(
+                f'service:{event.service} topic:{event.topic}'
+            )
+
+        transport = self.get_transport(decl)
+        await transport.send_queue.put(event)
+
+    def get_transport(self, decl: Union[RpcMethod, Subscription]):
+        name = decl.transport
+        if isinstance(name, list):
+            name = name[0]
+
+        try:
+            if isinstance(decl, RpcMethod):
+                return self.rpc_transports[name]
+            else:
+                return self.pubsub_transports[name]
+        except KeyError:
+            raise TransportNotFound(f'transport: {name}')
 
     def create_server(self) -> None:
         self.futures.append(ensure_future(self.process_rpc_calls()))
-        self.futures.append(ensure_future(self.process_events()))
 
     async def stop(self) -> None:
         self.running = False
         await self.local_rpc_queue.put('stop')
-        await self.pubsub_receive_queue.put('stop')
         for fut in self.futures:
             try:
                 await fut
@@ -97,30 +161,36 @@ class Sif:
             except:
                 continue
 
-            if call == 'stop':
-                return
+            if isinstance(call, str):
+                if call == 'stop':
+                    return
+                continue
 
             try:
-                method = self.rpcs[call.method]
+                method = self.rpcs[(call.service, call.method)]
             except KeyError:
-                raise MethodNotFound(call.method)
+                raise MethodNotFound(
+                    f'service:{call.service} method:{call.method}'
+                )
 
             ensure_future(call_rpc(call, method))
 
-    async def process_events(self) -> None:
+    async def process_events(self, queue: EventsQueue) -> None:
         while self.running:
             try:
-                event = await self.pubsub_receive_queue.get()
+                event = await queue.get()
             except:
                 continue
 
-            if event == 'stop':
-                return
+            if isinstance(event, str):
+                if event == 'stop':
+                    return
+                continue
 
             try:
-                subs = self.subscriptions[event.topic]
+                subs = self.subs[(event.service, event.topic)]
             except KeyError:
                 continue
 
             for sub in subs:
-                ensure_future(call_subscription, sub)
+                ensure_future(call_subscription(event, sub))
