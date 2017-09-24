@@ -1,16 +1,19 @@
 from codecs import open
 from os import path
 
-from setuptools import find_packages, setup
+from setuptools import setup
 
-here = path.abspath(path.dirname(__file__))
+basedir = path.abspath(path.join(path.dirname(__file__), '../'))
 
-with open(path.join(here, 'README.md'), encoding='utf-8') as f:
+with open(path.join(basedir, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
+
+with open(path.join(basedir, 'VERSION'), encoding='utf-8') as f:
+    version = f.read().strip()
 
 setup(
     name='sif',
-    version='0.0.1a0',
+    version=version,
     description='Microservices framework with the soul of a wolf',
     long_description=long_description,
     url='https://github.com/rudineirk/sif',
@@ -26,10 +29,5 @@ setup(
         'Programming Language :: Python :: 3.6',
     ],
     keywords='sif microservices framework',
-    packages=find_packages(exclude=[
-        'contrib',
-        'docs',
-        'tests',
-        'examples',
-    ]),
+    packages=['sif'],
 )

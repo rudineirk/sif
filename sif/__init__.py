@@ -1,8 +1,6 @@
 from .sif import Sif
 from .data import Context, Event, RpcCall, RpcMethod, Subscription
-from . import client
-
-Client = client.Client
+from .client import Client
 
 __all__ = [
     'Sif',
@@ -12,5 +10,4 @@ __all__ = [
     'RpcCall',
     'RpcMethod',
     'Subscription',
-    'client',
 ]
