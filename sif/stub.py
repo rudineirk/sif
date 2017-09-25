@@ -1,9 +1,8 @@
-from asyncio import get_event_loop
 from typing import Awaitable, Generic, List, Optional, TypeVar, Union
 
 from .data import RpcMethod as RpcMethodDecl
 from .data import Subscription as SubscriptionDecl
-from .data import Deserializer, Event, RpcCall, Serializer, ServiceMethod
+from .data import Deserializer, Serializer, ServiceMethod
 
 EventPayload = TypeVar('EventPayload')
 RpcReqPayload = TypeVar('RpcReqPayload')
@@ -28,7 +27,6 @@ class Rpc(Generic[RpcReqPayload, RpcRespPayload]):
         resp_serializer: Optional[Serializer]=None,
         resp_deserializer: Optional[Deserializer]=None,
     ) -> None:
-        self.loop = get_event_loop()
         self.stub = stub
         self.sif = stub.sif
         self.service = stub.service
@@ -49,13 +47,12 @@ class Rpc(Generic[RpcReqPayload, RpcRespPayload]):
         return self.call(payload)
 
     async def call(self, payload: RpcReqPayload) -> RpcRespPayload:
-        call = RpcCall(
+        call = self.sif.create_rpc_call(
             self.service,
             self.method,
             payload,
-            self.loop.create_future(),
         )
-        self.sif.enqueue_rpc_call(call)
+        await self.sif.call(call)
         return await call.fut
 
     def listen(
@@ -92,7 +89,7 @@ class Sub(Generic[EventPayload]):
         return self.call(payload)
 
     async def call(self, payload: EventPayload) -> None:
-        event = Event(self.service, self.topic, payload)
+        event = self.sif.create_event(self.service, self.topic, payload)
         await self.sif.push(event)
 
     def listen(self, func: ServiceMethod[EventPayload, None]):

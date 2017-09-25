@@ -1,5 +1,6 @@
-from asyncio import Future
+from asyncio import Future, Queue
 from typing import (
+    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
@@ -38,20 +39,27 @@ class Event(NamedTuple):
 class RpcMethod(NamedTuple):
     service: str
     method: str
-    transport: Union[str, List[str]]
-    req_serializer: Optional[Serializer[Any, Any]] = None
-    req_deserializer: Optional[Deserializer[Any, Any]] = None
-    resp_serializer: Optional[Serializer[Any, Any]] = None
-    resp_deserializer: Optional[Deserializer[Any, Any]] = None
+    transports: List[str]
+    req_serializer: Optional[Serializer[Any, bytes]] = None
+    req_deserializer: Optional[Deserializer[bytes, Any]] = None
+    resp_serializer: Optional[Serializer[Any, bytes]] = None
+    resp_deserializer: Optional[Deserializer[bytes, Any]] = None
 
 
 class Subscription(NamedTuple):
     service: str
     topic: str
-    transport: Union[str, List[str]]
-    serializer: Optional[Serializer[Any, Any]] = None
-    deserializer: Optional[Deserializer[Any, Any]] = None
+    transports: List[str]
+    serializer: Optional[Serializer[Any, bytes]] = None
+    deserializer: Optional[Deserializer[bytes, Any]] = None
 
+
+if TYPE_CHECKING:
+    RpcCallQueue = Queue[Union[RpcCall, str]]
+    EventsQueue = Queue[Union[Event, str]]
+else:
+    RpcCallQueue = 'Queue[Union[RpcCall, str]]'
+    EventsQueue = 'Queue[Union[Event, str]]'
 
 Payload = TypeVar('Payload')
 Resp = TypeVar('Resp')

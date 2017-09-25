@@ -1,12 +1,14 @@
 import traceback
 from asyncio import Future, Queue, ensure_future, get_event_loop  # noqa
-from typing import Any, Dict, List, Tuple, Union  # noqa
+from typing import Any, Dict, List, Optional, Tuple, Union  # noqa
 
 from .data import (  # noqa
     Context,
     Event,
+    EventsQueue,
     PubSubMap,
     RpcCall,
+    RpcCallQueue,
     RpcMap,
     RpcMethod,
     ServiceMethod,
@@ -18,12 +20,7 @@ from .exceptions import (
     TopicNotFound,
     TransportNotFound
 )
-from .transports import (  # noqa
-    EventsQueue,
-    PubSubTransport,
-    RpcCallQueue,
-    RpcTransport
-)
+from .transports import PubSubTransport, RpcTransport  # noqa
 
 RpcFuncMap = Dict[Tuple[str, str], ServiceMethod[Any, Any]]
 SubFuncMap = Dict[Tuple[str, str], List[ServiceMethod[Any, Any]]]
@@ -64,11 +61,15 @@ class Sif:
 
         self.local_rpc_queue: RpcCallQueue = Queue()
         self.futures: List[Future] = []
-        self.running = True
 
     def add_decl(self, decl: Union[RpcMethod, Subscription]) -> None:
         if isinstance(decl, RpcMethod):
             self.rpcs_decl[(decl.service, decl.method)] = decl
+            for name in decl.transports:
+                if decl.service == self.service:
+                    self.rpc_transports[name].add_listener(decl)
+                else:
+                    self.rpc_transports[name].add_sender(decl)
         else:
             self.subs_decl[(decl.service, decl.topic)] = decl
 
@@ -104,7 +105,7 @@ class Sif:
             )
         self.rpcs[(decl.service, decl.method)] = func
 
-    def enqueue_rpc_call(self, call: RpcCall) -> None:
+    async def call(self, call: RpcCall) -> None:
         try:
             decl = self.rpcs_decl[(call.service, call.method)]
         except KeyError:
@@ -112,11 +113,11 @@ class Sif:
                 f'service:{call.service} method:{call.method}'
             )
         if call.service == self.service:
-            self.local_rpc_queue.put_nowait(call)
+            await self.local_rpc_queue.put(call)
             return
 
         transport = self.get_transport(decl)
-        transport.send_queue.put_nowait(call)
+        await transport.send_queue.put(call)
 
     async def push(self, event: Event) -> None:
         try:
@@ -129,10 +130,28 @@ class Sif:
         transport = self.get_transport(decl)
         await transport.send_queue.put(event)
 
+    def create_rpc_call(
+        self,
+        service: str,
+        method: str,
+        payload: Any,
+        fut: Optional[Future] = None,
+    ) -> RpcCall:
+        if fut is None:
+            fut = self.loop.create_future()
+
+        return RpcCall(service, method, payload, fut=fut)
+
+    def create_event(
+        self,
+        service: str,
+        topic: str,
+        payload: Any,
+    ) -> Event:
+        return Event(service, topic, payload)
+
     def get_transport(self, decl: Union[RpcMethod, Subscription]):
-        name = decl.transport
-        if isinstance(name, list):
-            name = name[0]
+        name = decl.transports[0]
 
         try:
             if isinstance(decl, RpcMethod):
@@ -144,10 +163,15 @@ class Sif:
 
     def create_server(self) -> None:
         self.futures.append(ensure_future(self.process_rpc_calls()))
+        for transport in self.rpc_transports.values():
+            ensure_future(transport.start())
 
     async def stop(self) -> None:
-        self.running = False
         await self.local_rpc_queue.put('stop')
+        for transport in self.rpc_transports.values():
+            await transport.send_queue.put('stop')
+            await transport.stop()
+
         for fut in self.futures:
             try:
                 await fut
@@ -155,7 +179,7 @@ class Sif:
                 traceback.print_exc()
 
     async def process_rpc_calls(self) -> None:
-        while self.running:
+        while True:
             try:
                 call = await self.local_rpc_queue.get()
             except:
@@ -176,7 +200,7 @@ class Sif:
             ensure_future(call_rpc(call, method))
 
     async def process_events(self, queue: EventsQueue) -> None:
-        while self.running:
+        while True:
             try:
                 event = await queue.get()
             except:

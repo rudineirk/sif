@@ -1,0 +1,6 @@
+from typing import Any, Dict
+
+Payload = Dict[str, Any]
+
+def packb(payload: Payload) -> bytes: ...
+def unpackb(payload: bytes) -> Payload: ...

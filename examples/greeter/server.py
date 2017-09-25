@@ -1,8 +1,14 @@
 from asyncio import get_event_loop
 
-from sif import Context
+from sif import Context, Sif
+from sif_nats import Nats, SifNatsRpc
 
-from .deps import greeter, sif
+from .deps import GreeterStub
+
+nats = Nats()
+sif = Sif('greeter.server')
+sif.add_rpc_transport('nats', SifNatsRpc(sif, nats))
+greeter = GreeterStub(sif)
 
 
 @greeter.greet.listen
